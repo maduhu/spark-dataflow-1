@@ -1,17 +1,30 @@
+/*
+ * Copyright (c) 2015, Cloudera, Inc. All Rights Reserved.
+ *
+ * Cloudera, Inc. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"). You may not use this file except in
+ * compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * This software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied. See the License for
+ * the specific language governing permissions and limitations under the
+ * License.
+ */
+
 package com.cloudera.dataflow.spark;
 
 import com.google.cloud.dataflow.sdk.Pipeline;
 import com.google.cloud.dataflow.sdk.coders.StringUtf8Coder;
-import com.google.cloud.dataflow.sdk.options.PipelineOptionsFactory;
+import com.google.cloud.dataflow.sdk.testing.DataflowAssert;
 import com.google.cloud.dataflow.sdk.transforms.Create;
 import com.google.cloud.dataflow.sdk.transforms.RemoveDuplicates;
 import com.google.cloud.dataflow.sdk.values.PCollection;
 import com.google.common.collect.ImmutableSet;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.junit.Assert;
 import org.junit.Test;
 
 /**
@@ -28,17 +41,14 @@ public class DeDupTest {
 
   @Test
   public void testRun() throws Exception {
-    Pipeline p = Pipeline.create(PipelineOptionsFactory.create());
+    SparkPipelineOptions options = SparkPipelineOptionsFactory.create();
+    options.setRunner(SparkPipelineRunner.class);
+    Pipeline p = Pipeline.create(options);
     PCollection<String> input = p.apply(Create.of(LINES)).setCoder(StringUtf8Coder.of());
     PCollection<String> output = input.apply(RemoveDuplicates.<String>create());
-    EvaluationResult res = SparkPipelineRunner.create().run(p);
-    Set<String> actualSet = new HashSet<>();
-    for (String s : res.get(output)) {
-      actualSet.add(s);
-    }
 
-    Assert.assertEquals(String.format("Actual lines [%s] does not equal expected [%s].",
-            actualSet, EXPECTED_SET), EXPECTED_SET, actualSet);
-    res.close();
+    DataflowAssert.that(output).containsInAnyOrder(EXPECTED_SET);
+
+    p.run();
   }
 }
