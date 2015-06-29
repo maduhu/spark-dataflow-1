@@ -44,9 +44,25 @@ public class SerializationTest {
 
   public static class StringHolder { // not serializable
     private String string;
+
     public StringHolder(String string) {
       this.string = string;
     }
+
+    @Override
+    public boolean equals(Object o) {
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+      StringHolder that = (StringHolder) o;
+      return string.equals(that.string);
+    }
+
+    @Override
+    public int hashCode() {
+      return string.hashCode();
+    }
+
     @Override
     public String toString() {
       return string;
@@ -65,11 +81,6 @@ public class SerializationTest {
     @Override
     public StringHolder decode(InputStream inStream, Context context) throws IOException {
       return new StringHolder(stringUtf8Coder.decode(inStream, context));
-    }
-
-    @Override
-    public boolean isDeterministic() {
-      return true;
     }
 
     public static Coder<StringHolder> of() {
@@ -107,20 +118,16 @@ public class SerializationTest {
 
     DataflowAssert.that(output).containsInAnyOrder(EXPECTED_COUNT_SET);
 
-    p.run();
-
+    EvaluationResult res = SparkPipelineRunner.create().run(p);
+    res.close();
   }
 
   /**
    * A DoFn that tokenizes lines of text into individual words.
    */
   static class ExtractWordsFn extends DoFn<StringHolder, StringHolder> {
-    private Aggregator<Long> emptyLines;
-
-    @Override
-    public void startBundle(Context c) {
-      emptyLines = c.createAggregator("emptyLines", new Sum.SumLongFn());
-    }
+    private final Aggregator<Long, Long> emptyLines =
+        createAggregator("emptyLines", new Sum.SumLongFn());
 
     @Override
     public void processElement(ProcessContext c) {

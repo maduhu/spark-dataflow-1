@@ -20,11 +20,13 @@ import com.google.cloud.dataflow.sdk.options.PipelineOptions;
 import com.google.cloud.dataflow.sdk.options.PipelineOptionsValidator;
 import com.google.cloud.dataflow.sdk.runners.PipelineRunner;
 import com.google.cloud.dataflow.sdk.runners.TransformTreeNode;
+import com.google.cloud.dataflow.sdk.transforms.AppliedPTransform;
 import com.google.cloud.dataflow.sdk.transforms.PTransform;
+import com.google.cloud.dataflow.sdk.values.PInput;
+import com.google.cloud.dataflow.sdk.values.POutput;
 import com.google.cloud.dataflow.sdk.values.PValue;
-import org.apache.spark.SparkConf;
+import org.apache.spark.SparkException;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.serializer.KryoSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -101,18 +103,26 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
 
   @Override
   public EvaluationResult run(Pipeline pipeline) {
-    JavaSparkContext jsc = getContext();
-    EvaluationContext ctxt = new EvaluationContext(jsc, pipeline);
-    pipeline.traverseTopologically(new Evaluator(ctxt));
-    return ctxt;
-  }
+    try {
+      LOG.info("Executing pipeline using the SparkPipelineRunner.");
 
-  private JavaSparkContext getContext() {
-    SparkConf conf = new SparkConf();
-    conf.setMaster(mOptions.getSparkMaster());
-    conf.setAppName("spark pipeline job");
-    conf.set("spark.serializer", KryoSerializer.class.getCanonicalName());
-    return new JavaSparkContext(conf);
+      JavaSparkContext jsc = SparkContextFactory.getSparkContext(mOptions.getSparkMaster());
+      EvaluationContext ctxt = new EvaluationContext(jsc, pipeline);
+      pipeline.traverseTopologically(new Evaluator(ctxt));
+      ctxt.computeOutputs();
+
+      LOG.info("Pipeline execution complete.");
+
+      return ctxt;
+    } catch (Exception e) {
+      // if the SparkException has a cause then wrap it in a RuntimeException
+      // (see https://issues.apache.org/jira/browse/SPARK-8625)
+      if (e instanceof SparkException && e.getCause() != null) {
+        throw new RuntimeException(e.getCause());
+      }
+      // otherwise just wrap in a RuntimeException
+      throw new RuntimeException(e);
+    }
   }
 
   private static final class Evaluator implements Pipeline.PipelineVisitor {
@@ -159,7 +169,7 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
       if (inTranslatedCompositeNode() && node.equals(currentTranslatedCompositeNode)) {
         LOG.info("Post-visiting directly-translatable composite transform: '{}'",
             node.getFullName());
-        doVisitTransform(node.getTransform());
+        doVisitTransform(node);
         currentTranslatedCompositeNode = null;
       }
     }
@@ -170,15 +180,21 @@ public final class SparkPipelineRunner extends PipelineRunner<EvaluationResult> 
         LOG.info("Skipping '{}'; already in composite transform.", node.getFullName());
         return;
       }
-      doVisitTransform(node.getTransform());
+      doVisitTransform(node);
     }
 
-    private <PT extends PTransform> void doVisitTransform(PT transform) {
+    private <PT extends PTransform> void doVisitTransform(TransformTreeNode node) {
+      PT transform = (PT) node.getTransform();
       @SuppressWarnings("unchecked")
       TransformEvaluator<PT> evaluator = (TransformEvaluator<PT>)
           TransformTranslator.getTransformEvaluator(transform.getClass());
       LOG.info("Evaluating {}", transform);
+      AppliedPTransform<PInput, POutput, ? extends PTransform> appliedTransform =
+          AppliedPTransform.of(node.getFullName(), node.getInput(), node.getOutput(),
+              (PTransform) transform);
+      ctxt.setCurrentTransform(appliedTransform);
       evaluator.evaluate(transform, ctxt);
+      ctxt.setCurrentTransform(null);
     }
 
     @Override
